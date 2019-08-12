@@ -44,6 +44,8 @@ enum sof_comp_type {
 	SOF_COMP_KPB,			/* A key phrase buffer component */
 	SOF_COMP_SELECTOR,		/**< channel selector component */
 	SOF_COMP_DEMUX,
+	SOF_COMP_SMART_AMP,		/**< smart amplifier component */
+	SOF_COMP_SMART_AMP_DEMUX,	/**< smart amplifier demux component */
 	/* keep FILEREAD/FILEWRITE as the last ones */
 	SOF_COMP_FILEREAD = 10000,	/**< host test based file IO */
 	SOF_COMP_FILEWRITE = 10001,	/**< host test based file IO */
