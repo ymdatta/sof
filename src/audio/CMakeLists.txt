@@ -56,6 +56,11 @@ if(NOT BUILD_LIBRARY)
 			detect_test.c
 		)
 	endif()
+	if(CONFIG_COMP_SMART_AMP)
+		add_local_sources(sof
+			smart_amp.c
+		)
+	endif()
 	return()
 endif()
 

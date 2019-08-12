@@ -75,4 +75,10 @@ config COMP_TEST_KEYPHRASE
 	  Select for KEYPHRASE_TEST component.
 	  Provides basic functionality for use in testing of keyphrase detection pipelines.
 
+config COMP_SMART_AMP
+	bool "Smart amplifier component"
+	default y
+	help
+	  Select for smart amplifier component
+
 endmenu
