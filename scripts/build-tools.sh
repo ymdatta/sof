@@ -40,6 +40,15 @@ build_fuzzer()
         make -j "$NO_PROCESSORS"
 }
 
+build_afl_fuzzer()
+{
+        cd "$SOF_REPO/tools/build_tools"
+        mkdir build_afl_fuzzer
+        cd build_afl_fuzzer
+        cmake ../../afl-fuzzer
+        make -j "$NO_PROCESSORS"
+}
+
 main()
 {
         local DO_BUILD_TEST DO_BUILD_FUZZER SCRIPT_DIR SOF_REPO
@@ -68,6 +77,7 @@ main()
         if "$DO_BUILD_FUZZER"
         then
                 build_fuzzer
+		build_afl_fuzzer
         fi
 }
 
