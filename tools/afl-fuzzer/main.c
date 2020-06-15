@@ -11,8 +11,10 @@
 #include <errno.h>
 #include <unistd.h>
 #include <sys/time.h>
+#include <sys/types.h>
 #include <pthread.h>
 #include <string.h>
+#include <signal.h>
 #include "fuzzer.h"
 #include <ipc/topology.h>
 #include <ipc/stream.h>
@@ -302,78 +304,105 @@ int main(int argc, char *argv[])
 		exit(EXIT_FAILURE);
 	}
 
-	/* init platform */
-	fprintf(stdout, "initialising platform %s\n", platform[0]->name);
-	ret = platform[0]->init(&fuzzer, platform[0]);
+	pid_t fid = fork();
+	if (!fid) {
 
-	if (ret == ETIMEDOUT) {
-		fprintf(stderr, "error: platform %s failed to initialise\n",
-			platform_name);
+		char *newargv[] = { "/home/sof/work/qemu/build/xtensa-softmmu/qemu-system-xtensa",
+				    "-cpu", "baytrail", "-M", "adsp_byt", "-nographic", "-kernel",
+				    "/home/sof/work/sof.git/build_byt_gcc/src/arch/xtensa/sof-byt.ri",
+				    NULL};
+		char *newenviron[] = { NULL };
+
+		printf("Executing qemu xtensa\n");
+
+		execve(newargv[0], newargv, newenviron);
+
+		/* execve() returns only on error */
+		perror("execve");
+
 		exit(EXIT_FAILURE);
+
+	} else {
+
+		// TODO: Need to make sure that child is executed first.
+		sleep(5);
+		
+		/* init platform */
+		fprintf(stdout, "initialising platform %s\n", platform[0]->name);
+		ret = platform[0]->init(&fuzzer, platform[0]);
+
+		if (ret == ETIMEDOUT) {
+			fprintf(stderr, "error: platform %s failed to initialise\n",
+				platform_name);
+			exit(EXIT_FAILURE);
+		}
+
+		fprintf(stdout, "FW boot complete\n");
+
+		/* allocate max ipc size bytes for the msg and reply */
+		fuzzer.msg.msg_data = malloc(SOF_IPC_MSG_MAX_SIZE);
+		fuzzer.msg.reply_data = malloc(SOF_IPC_MSG_MAX_SIZE);
+
+		/* Open ipc message file */
+		fp = fopen(argv[1], "rb");
+		if (!fp) {
+			fprintf(stderr, "error: opening ipc msg file %s\n",
+				argv[1]);
+			exit(EXIT_FAILURE);
+		}
+
+		/* ipc message file structure:
+		   header
+		   msg_size
+		   msg data
+		*/
+
+		ret = fread(&fuzzer.msg.header, sizeof(uint32_t), 1, fp);
+
+		if (ret != 1) {
+			fprintf(stderr, "error: reading header of ipc message from %s failed\n",
+				argv[1]);
+			exit(EXIT_FAILURE);
+		}
+
+		fprintf(stdout, "header read: %ud\n", fuzzer.msg.header);
+
+		unsigned int uret = 0;
+		uret = fread(&fuzzer.msg.msg_size, sizeof(unsigned int), 1, fp);
+
+		fprintf(stdout, "msg_size read: %lu\n", fuzzer.msg.msg_size);
+		if (uret != 1) {
+			fprintf(stderr, "error: reading msg_size of ipc message from %s failed\n",
+				argv[1]);
+			exit(EXIT_FAILURE);
+		}
+
+		if (fuzzer.msg.msg_size > SOF_IPC_MSG_MAX_SIZE) {
+			fprintf(stderr, "error: msg_size of ipc message exceeds max size %d\n",
+				SOF_IPC_MSG_MAX_SIZE);
+			exit(EXIT_FAILURE);
+		}
+
+
+		uret = fread(fuzzer.msg.msg_data, sizeof(char), fuzzer.msg.msg_size, fp);
+
+		if (uret != fuzzer.msg.msg_size) {
+			fprintf(stderr, "error: reading msg_data of ipc message from %s failed\n",
+				argv[1]);
+			exit(EXIT_FAILURE);
+		}
+
+		ret = fuzzer_send_msg(&fuzzer);
+
+		/* all done - now free platform */
+		platform[0]->free(&fuzzer);
+
+		/* Kill child process */
+		ret = kill(fid, SIGKILL);
+		if (ret != 0) {
+			fprintf(stderr, "killing child process failed\n");
+			exit(EXIT_FAILURE);
+		}
+		return 0;
 	}
-
-	fprintf(stdout, "FW boot complete\n");
-
-	/* allocate max ipc size bytes for the msg and reply */
-	fuzzer.msg.msg_data = malloc(SOF_IPC_MSG_MAX_SIZE);
-	fuzzer.msg.reply_data = malloc(SOF_IPC_MSG_MAX_SIZE);
-
-	/* Open ipc message file */
-	fp = fopen(argv[1], "rb");
-	if (!fp) {
-		fprintf(stderr, "error: opening ipc msg file %s\n",
-			argv[1]);
-		exit(EXIT_FAILURE);
-	}
-
-	/* ipc message file structure:
-	   header
-	   msg_size
-	   msg data
-	*/
-
-	ret = fread(&fuzzer.msg.header, sizeof(uint32_t), 1, fp);
-	
-	if (ret != 1) {
-		fprintf(stderr, "error: reading header of ipc message from %s failed\n",
-			argv[1]);
-		exit(EXIT_FAILURE);
-	}
-
-	fprintf(stdout, "header read: %ud\n", fuzzer.msg.header);
-
-	unsigned int uret = 0;	
-	uret = fread(&fuzzer.msg.msg_size, sizeof(unsigned int), 1, fp);
-
-	fprintf(stdout, "msg_size read: %lu\n", fuzzer.msg.msg_size);	
-	if (uret != 1) {
-		fprintf(stderr, "error: reading msg_size of ipc message from %s failed\n",
-			argv[1]);
-		exit(EXIT_FAILURE);
-	}
-
-	if (fuzzer.msg.msg_size > SOF_IPC_MSG_MAX_SIZE) {
-		fprintf(stderr, "error: msg_size of ipc message exceeds max size %d\n",
-			SOF_IPC_MSG_MAX_SIZE);
-		exit(EXIT_FAILURE);
-	}		
-
-
-	uret = fread(fuzzer.msg.msg_data, sizeof(char), fuzzer.msg.msg_size, fp);
-
-	if (uret != fuzzer.msg.msg_size) {
-		fprintf(stderr, "error: reading msg_data of ipc message from %s failed\n",
-			argv[1]);
-		exit(EXIT_FAILURE);
-	}		
-	
-	// Initializing fuzzer messsage randomly
-	/* fuzzer.msg.header = SOF_IPC_GLB_COMP_MSG; */
-	/* fuzzer.msg.msg_size = 0; */
-
-	ret = fuzzer_send_msg(&fuzzer);
-
-	/* all done - now free platform */
-	platform[0]->free(&fuzzer);
-	return 0;
 }
