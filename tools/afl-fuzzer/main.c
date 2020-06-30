@@ -85,13 +85,8 @@ static void usage(char *name)
 {
 	int i;
 
-	fprintf(stdout, "Usage %s -p platform <option(s)>\n", name);
-	fprintf(stdout, "		-t topology file\n");
-	fprintf(stdout, "		-p platform name\n");
-	fprintf(stdout, "		supported platforms: ");
-	for (i = 0; i < ARRAY_SIZE(platform); i++)
-		fprintf(stdout, "%s ", platform[i]->name);
-	fprintf(stdout, "\n");
+	fprintf(stdout, "Usage %s -m ipc_msg_file <option(s)>\n", name);
+	fprintf(stdout, "		-h - prints this help message\n");
 	fprintf(stdout, "Qemu must be started before the fuzzer is run.\n");
 
 	exit(0);
@@ -264,7 +259,7 @@ int fuzzer_send_msg(struct fuzz *fuzzer)
 		fprintf(stderr, "error: IPC timeout\n");
 		ipc_dump_err(&fuzzer->msg);
 		pthread_mutex_unlock(&ipc_mutex);
-		exit(0);
+		return ret;
 	}
 
 	pthread_mutex_unlock(&ipc_mutex);
@@ -289,18 +284,24 @@ int main(int argc, char *argv[])
 	char opt;
 	FILE *fp = NULL;
 
-	while ((opt = getopt(argc, argv, "m:")) != -1) {
+	while ((opt = getopt(argc, argv, "hm:")) != -1) {
 		switch (opt) {
 		case 'm':
 			ipc_msg_file = optarg;
 			break;
+		case 'h':
+			usage(argv[0]);
+			exit(0);
+			break;
 		default:
+			usage(argv[0]);
 			exit(EXIT_FAILURE);
 		}
 	}
 
-	if (argc != 2) {
-		fprintf(stderr, "error: Usage ./sof-afl-fuzzer file\n");
+	if (!ipc_msg_file) {
+		fprintf(stderr, "error: no ipc msg input file specified\n");
+		usage(argv[0]);
 		exit(EXIT_FAILURE);
 	}
 
@@ -331,7 +332,7 @@ int main(int argc, char *argv[])
 		fprintf(stdout, "initialising platform %s\n", platform[0]->name);
 		ret = platform[0]->init(&fuzzer, platform[0]);
 
-		if (ret == ETIMEDOUT) {
+		if (ret == ETIMEDOUT || ret < 0) {
 			fprintf(stderr, "error: platform %s failed to initialise\n",
 				platform_name);
 			exit(EXIT_FAILURE);
@@ -344,10 +345,10 @@ int main(int argc, char *argv[])
 		fuzzer.msg.reply_data = malloc(SOF_IPC_MSG_MAX_SIZE);
 
 		/* Open ipc message file */
-		fp = fopen(argv[1], "rb");
+		fp = fopen(ipc_msg_file, "rb");
 		if (!fp) {
 			fprintf(stderr, "error: opening ipc msg file %s\n",
-				argv[1]);
+				ipc_msg_file);
 			exit(EXIT_FAILURE);
 		}
 
@@ -361,7 +362,7 @@ int main(int argc, char *argv[])
 
 		if (ret != 1) {
 			fprintf(stderr, "error: reading header of ipc message from %s failed\n",
-				argv[1]);
+				ipc_msg_file);
 			exit(EXIT_FAILURE);
 		}
 
@@ -373,35 +374,42 @@ int main(int argc, char *argv[])
 		fprintf(stdout, "msg_size read: %lu\n", fuzzer.msg.msg_size);
 		if (uret != 1) {
 			fprintf(stderr, "error: reading msg_size of ipc message from %s failed\n",
-				argv[1]);
+				ipc_msg_file);
 			exit(EXIT_FAILURE);
 		}
-
-		if (fuzzer.msg.msg_size > SOF_IPC_MSG_MAX_SIZE) {
-			fprintf(stderr, "error: msg_size of ipc message exceeds max size %d\n",
-				SOF_IPC_MSG_MAX_SIZE);
-			exit(EXIT_FAILURE);
-		}
-
 
 		uret = fread(fuzzer.msg.msg_data, sizeof(char), fuzzer.msg.msg_size, fp);
 
 		if (uret != fuzzer.msg.msg_size) {
 			fprintf(stderr, "error: reading msg_data of ipc message from %s failed\n",
-				argv[1]);
+				ipc_msg_file);
 			exit(EXIT_FAILURE);
 		}
 
 		ret = fuzzer_send_msg(&fuzzer);
 
-		/* all done - now free platform */
-		platform[0]->free(&fuzzer);
+		if (ret == -EINVAL) {
+			fprintf(stderr, "error: failed to receive reply from DSP\n");
+			platform[0]->free(&fuzzer);
+			if (!kill(fid, SIGKILL)) {
+				fprintf(stderr, "killing child process failed\n");
+				// TODO: Is this the correct way to exit here?
+			}
 
-		/* Kill child process */
-		ret = kill(fid, SIGKILL);
-		if (ret != 0) {
-			fprintf(stderr, "killing child process failed\n");
-			exit(EXIT_FAILURE);
+			fprintf(stdout, "Raising SIGABRT signal\n");
+			/* raise SIGABRT so that fuzzer sees this as a crash */
+			abort();
+		} else {
+			/* all done - now free platform */
+			platform[0]->free(&fuzzer);
+
+			/* Kill child process */
+			ret = kill(fid, SIGKILL);
+			if (ret != 0) {
+				fprintf(stderr, "killing child process failed\n");
+				exit(EXIT_FAILURE);
+			}
+			fprintf(stdout, "Freeing the fuzzer\n");
 		}
 		return 0;
 	}
